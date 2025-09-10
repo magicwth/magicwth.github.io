@@ -33,6 +33,12 @@
       document.body.innerHTML = "<p style='color:white;font-size:24px'>No channel specified! Add ?channel=YourTwitchName</p>";
     } else {
       console.log("Connecting to Twitch chat for channel:", channel);
+      
+      // Add status display
+      const statusDiv = document.createElement("div");
+      statusDiv.style.cssText = "position:fixed;top:10px;left:10px;color:white;background:rgba(0,0,0,0.7);padding:10px;border-radius:5px;font-family:Arial;z-index:1000;";
+      statusDiv.innerHTML = "Connecting to " + channel + "...";
+      document.body.appendChild(statusDiv);
 
       // Connect anonymously to Twitch IRC
       const client = new tmi.Client({
@@ -40,26 +46,88 @@
         channels: [channel]
       });
 
-      client.connect();
+      // Connection event handlers
+      client.on("connected", (addr, port) => {
+        console.log("Connected to Twitch IRC:", addr, port);
+        statusDiv.innerHTML = "Connected to " + channel + " ✓";
+        statusDiv.style.background = "rgba(0,255,0,0.7)";
+      });
+
+      client.on("disconnected", (reason) => {
+        console.log("Disconnected from Twitch IRC:", reason);
+        statusDiv.innerHTML = "Disconnected: " + reason;
+        statusDiv.style.background = "rgba(255,0,0,0.7)";
+      });
+
+      client.on("notice", (channel, msgid, message) => {
+        console.log("Twitch notice:", msgid, message);
+        statusDiv.innerHTML = "Notice: " + message;
+        statusDiv.style.background = "rgba(255,165,0,0.7)";
+      });
+
+      client.connect().catch(err => {
+        console.error("Connection error:", err);
+        statusDiv.innerHTML = "Connection error: " + err.message;
+        statusDiv.style.background = "rgba(255,0,0,0.7)";
+      });
 
       client.on("message", (chan, tags, message, self) => {
+        console.log("Message received:", {
+          channel: chan,
+          username: tags.username,
+          message: message,
+          isMod: tags.mod,
+          isBroadcaster: tags.username === channel,
+          isSelf: self
+        });
+
         if (self) return;
 
         // Only allow moderators or broadcaster
-        if (!tags.mod && tags.username !== channel) return;
+        if (!tags.mod && tags.username !== channel) {
+          console.log("Message ignored - user is not mod or broadcaster");
+          return;
+        }
+
+        console.log("User is authorized:", tags.username);
 
         // Check for !img command
         if (message.startsWith("!img ")) {
           const url = message.split(" ")[1];
+          console.log("!img command detected, URL:", url);
+          
           if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
             const img = document.getElementById("overlayImage");
+            
+            // Add error handling for image loading
+            img.onerror = function() {
+              console.log("Failed to load image:", url);
+              statusDiv.innerHTML = "Failed to load image";
+              statusDiv.style.background = "rgba(255,0,0,0.7)";
+              img.style.display = "none";
+            };
+            
+            img.onload = function() {
+              console.log("Image loaded successfully:", url);
+              statusDiv.innerHTML = "Image displayed: " + url.substring(0, 50) + "...";
+              statusDiv.style.background = "rgba(0,255,255,0.7)";
+            };
+            
             img.src = url;
             img.style.display = "block";
+            console.log("Image displayed:", url);
 
-            // Hide image after 5 seconds
+            // Hide image after 3 seconds
             setTimeout(() => {
               img.style.display = "none";
-            }, 5000);
+              console.log("Image hidden after 3 seconds");
+              statusDiv.innerHTML = "Connected to " + channel + " ✓";
+              statusDiv.style.background = "rgba(0,255,0,0.7)";
+            }, 3000);
+          } else {
+            console.log("Invalid URL format:", url);
+            statusDiv.innerHTML = "Invalid URL format";
+            statusDiv.style.background = "rgba(255,0,0,0.7)";
           }
         }
       });
