@@ -3,10 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Twitch Image Overlay</title>
-  <!-- Try multiple libraries as fallbacks -->
-  <script src="https://unpkg.com/tmi.js@1.8.5/dist/tmi.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/ws@8.14.2/lib/websocket.js"></script>
-  <script src="https://unpkg.com/axios@1.6.0/dist/axios.min.js"></script>
+  <!-- Chatis service integration -->
   <style>
     body {
       background: transparent;
@@ -27,10 +24,7 @@
 <body>
   <img id="overlayImage" />
   
-  <!-- Hidden iframe for popout chat -->
-  <iframe id="chatIframe" src="" style="display:none;width:0;height:0;border:none;"></iframe>
-  
-  <!-- Hidden iframe for third-party chat services -->
+  <!-- Hidden iframe for Chatis chat service -->
   <iframe id="thirdPartyChat" src="" style="display:none;width:0;height:0;border:none;"></iframe>
   
   <!-- Test button for debugging -->
@@ -72,29 +66,10 @@
         }, 3000);
       };
 
-      // Try multiple approaches including third-party services
-      let connectionAttempts = 0;
-      const maxAttempts = 7;
-      
+      // Use only Chatis service
       function tryConnection() {
-        connectionAttempts++;
-        console.log(`Connection attempt ${connectionAttempts}/${maxAttempts}`);
-        
-        if (connectionAttempts === 1) {
-          tryChatisService();
-        } else if (connectionAttempts === 2) {
-          tryStreamlabsChat();
-        } else if (connectionAttempts === 3) {
-          tryPopoutChat();
-        } else if (connectionAttempts === 4) {
-          tryTmiConnection();
-        } else if (connectionAttempts === 5) {
-          tryWebSocketConnection();
-        } else if (connectionAttempts === 6) {
-          tryFetchPolling();
-        } else {
-          tryProxyConnection();
-        }
+        console.log("Connecting to Chatis service...");
+        tryChatisService();
       }
       
       function tryChatisService() {
@@ -161,13 +136,9 @@
         
         thirdPartyIframe.onerror = function() {
           console.error("Failed to load Chatis service");
-          if (connectionAttempts < maxAttempts) {
-            setTimeout(tryConnection, 2000);
-          } else {
-            statusDiv.innerHTML = "All connection methods failed";
-            statusDiv.style.background = "rgba(255,0,0,0.7)";
-            showManualInput();
-          }
+          statusDiv.innerHTML = "Failed to load Chatis service";
+          statusDiv.style.background = "rgba(255,0,0,0.7)";
+          showManualInput();
         };
       }
       
@@ -212,347 +183,13 @@
           } catch (error) {
             console.error("Chatis polling error:", error);
             clearInterval(pollInterval);
-            if (connectionAttempts < maxAttempts) {
-              setTimeout(tryConnection, 2000);
-            } else {
-              statusDiv.innerHTML = "All connection methods failed";
-              statusDiv.style.background = "rgba(255,0,0,0.7)";
-              showManualInput();
-            }
+            statusDiv.innerHTML = "Chatis polling failed";
+            statusDiv.style.background = "rgba(255,0,0,0.7)";
+            showManualInput();
           }
         }, 2000);
       }
       
-      function tryStreamlabsChat() {
-        console.log("Trying Streamlabs chat...");
-        statusDiv.innerHTML = "Trying Streamlabs chat...";
-        statusDiv.style.background = "rgba(255,165,0,0.7)";
-        
-        // Try Streamlabs chat overlay
-        const thirdPartyIframe = document.getElementById('thirdPartyChat');
-        thirdPartyIframe.src = `https://streamlabs.com/embed/chat?channel=${channel}`;
-        
-        thirdPartyIframe.onload = function() {
-          console.log("Streamlabs chat loaded");
-          try {
-            const iframeDoc = thirdPartyIframe.contentDocument || thirdPartyIframe.contentWindow.document;
-            
-            const observer = new MutationObserver(function(mutations) {
-              mutations.forEach(function(mutation) {
-                if (mutation.type === 'childList') {
-                  const messages = iframeDoc.querySelectorAll('[class*="message"], [class*="chat"], .sl-chat-message');
-                  messages.forEach(function(messageEl) {
-                    const text = messageEl.textContent || messageEl.innerText;
-                    if (text && text.includes('!img ')) {
-                      console.log("Streamlabs message detected:", text);
-                      
-                      const parts = text.split(' ');
-                      const username = parts[0] || '';
-                      const message = text.substring(text.indexOf('!img '));
-                      
-                      if (username.toLowerCase() === channel.toLowerCase() || 
-                          messageEl.querySelector('[class*="mod"], [class*="broadcaster"]')) {
-                        const url = message.split(' ')[1];
-                        if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-                          showImage(url);
-                        }
-                      }
-                    }
-                  });
-                }
-              });
-            });
-            
-            observer.observe(iframeDoc.body, {
-              childList: true,
-              subtree: true
-            });
-            
-            statusDiv.innerHTML = "Connected to " + channel + " ✓ (Streamlabs)";
-            statusDiv.style.background = "rgba(0,255,0,0.7)";
-            console.log("Streamlabs observer started");
-            
-          } catch (error) {
-            console.error("Cannot access Streamlabs content:", error);
-            if (connectionAttempts < maxAttempts) {
-              setTimeout(tryConnection, 2000);
-            } else {
-              statusDiv.innerHTML = "All connection methods failed";
-              statusDiv.style.background = "rgba(255,0,0,0.7)";
-              showManualInput();
-            }
-          }
-        };
-        
-        thirdPartyIframe.onerror = function() {
-          console.error("Failed to load Streamlabs chat");
-          if (connectionAttempts < maxAttempts) {
-            setTimeout(tryConnection, 2000);
-          } else {
-            statusDiv.innerHTML = "All connection methods failed";
-            statusDiv.style.background = "rgba(255,0,0,0.7)";
-            showManualInput();
-          }
-        };
-      }
-      
-      function tryPopoutChat() {
-        console.log("Trying popout chat method...");
-        statusDiv.innerHTML = "Trying popout chat...";
-        statusDiv.style.background = "rgba(255,165,0,0.7)";
-        
-        // Load the popout chat in iframe
-        const chatIframe = document.getElementById('chatIframe');
-        chatIframe.src = `https://www.twitch.tv/popout/${channel}/chat?popout=`;
-        
-        // Try to access the iframe content and listen for messages
-        chatIframe.onload = function() {
-          console.log("Popout chat loaded");
-          try {
-            // Try to access the iframe's document
-            const iframeDoc = chatIframe.contentDocument || chatIframe.contentWindow.document;
-            
-            // Look for chat messages in the iframe
-            const observer = new MutationObserver(function(mutations) {
-              mutations.forEach(function(mutation) {
-                if (mutation.type === 'childList') {
-                  // Look for new chat messages
-                  const messages = iframeDoc.querySelectorAll('[data-a-target="chat-line-message"]');
-                  messages.forEach(function(messageEl) {
-                    const textEl = messageEl.querySelector('[data-a-target="chat-message-text"]');
-                    if (textEl) {
-                      const message = textEl.textContent;
-                      const usernameEl = messageEl.querySelector('[data-a-target="chat-author-display-name"]');
-                      const username = usernameEl ? usernameEl.textContent : '';
-                      
-                      console.log("Popout chat message:", username, message);
-                      
-                      // Check if it's a mod/broadcaster and has !img command
-                      if (message.startsWith('!img ')) {
-                        // Check if user is mod or broadcaster (simplified check)
-                        if (username.toLowerCase() === channel.toLowerCase() || 
-                            messageEl.querySelector('[data-a-target="chat-badge"]')) {
-                          const url = message.split(' ')[1];
-                          if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-                            showImage(url);
-                          }
-                        }
-                      }
-                    }
-                  });
-                }
-              });
-            });
-            
-            // Start observing
-            observer.observe(iframeDoc.body, {
-              childList: true,
-              subtree: true
-            });
-            
-            statusDiv.innerHTML = "Connected to " + channel + " ✓ (Popout)";
-            statusDiv.style.background = "rgba(0,255,0,0.7)";
-            console.log("Popout chat observer started");
-            
-          } catch (error) {
-            console.error("Cannot access popout chat content:", error);
-            // Try alternative popout method
-            tryAlternativePopout();
-          }
-        };
-        
-        chatIframe.onerror = function() {
-          console.error("Failed to load popout chat");
-          if (connectionAttempts < maxAttempts) {
-            setTimeout(tryConnection, 2000);
-          } else {
-            statusDiv.innerHTML = "All connection methods failed";
-            statusDiv.style.background = "rgba(255,0,0,0.7)";
-            showManualInput();
-          }
-        };
-      }
-      
-      function tryAlternativePopout() {
-        console.log("Trying alternative popout method...");
-        
-        // Try using a different popout URL format
-        const chatIframe = document.getElementById('chatIframe');
-        chatIframe.src = `https://www.twitch.tv/${channel}/chat?popout=`;
-        
-        // Use polling to check for messages
-        let lastMessageCount = 0;
-        const pollInterval = setInterval(() => {
-          try {
-            const iframeDoc = chatIframe.contentDocument || chatIframe.contentWindow.document;
-            const messages = iframeDoc.querySelectorAll('[data-a-target="chat-line-message"]');
-            
-            if (messages.length > lastMessageCount) {
-              // New messages detected
-              for (let i = lastMessageCount; i < messages.length; i++) {
-                const messageEl = messages[i];
-                const textEl = messageEl.querySelector('[data-a-target="chat-message-text"]');
-                if (textEl) {
-                  const message = textEl.textContent;
-                  const usernameEl = messageEl.querySelector('[data-a-target="chat-author-display-name"]');
-                  const username = usernameEl ? usernameEl.textContent : '';
-                  
-                  console.log("Polled message:", username, message);
-                  
-                  if (message.startsWith('!img ')) {
-                    const url = message.split(' ')[1];
-                    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-                      showImage(url);
-                    }
-                  }
-                }
-              }
-              lastMessageCount = messages.length;
-            }
-            
-            statusDiv.innerHTML = "Connected to " + channel + " ✓ (Polling)";
-            statusDiv.style.background = "rgba(0,255,0,0.7)";
-            
-          } catch (error) {
-            console.error("Polling error:", error);
-            clearInterval(pollInterval);
-            if (connectionAttempts < maxAttempts) {
-              setTimeout(tryConnection, 2000);
-            } else {
-              statusDiv.innerHTML = "All connection methods failed";
-              statusDiv.style.background = "rgba(255,0,0,0.7)";
-              showManualInput();
-            }
-          }
-        }, 2000);
-      }
-      
-      function tryTmiConnection() {
-        console.log("Trying TMI.js connection...");
-        const client = new tmi.Client({
-          options: { debug: true },
-          connection: { 
-            reconnect: false, 
-            secure: true,
-            timeout: 10000
-          },
-          channels: [channel]
-        });
-        
-        client.on("connected", (addr, port) => {
-          console.log("TMI connection successful:", addr, port);
-          statusDiv.innerHTML = "Connected to " + channel + " ✓";
-          statusDiv.style.background = "rgba(0,255,0,0.7)";
-          setupTmiEvents(client);
-        });
-        
-        client.connect().catch(err => {
-          console.error("TMI connection failed:", err);
-          if (connectionAttempts < maxAttempts) {
-            setTimeout(tryConnection, 2000);
-          } else {
-            statusDiv.innerHTML = "All connection methods failed";
-            statusDiv.style.background = "rgba(255,0,0,0.7)";
-          }
-        });
-      }
-      
-      function tryWebSocketConnection() {
-        console.log("Trying direct WebSocket connection...");
-        const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
-        
-        ws.onopen = function() {
-          console.log("WebSocket connected");
-          ws.send('PASS oauth:anonymous');
-          ws.send('NICK justinfan' + Math.floor(Math.random() * 100000));
-          ws.send('JOIN #' + channel);
-          statusDiv.innerHTML = "Connected to " + channel + " ✓ (WS)";
-          statusDiv.style.background = "rgba(0,255,0,0.7)";
-        };
-        
-        ws.onmessage = function(event) {
-          const message = event.data;
-          console.log("WS message:", message);
-          
-          if (message.includes('PRIVMSG')) {
-            const parts = message.split(' ');
-            const username = parts[0].split('!')[0].substring(1);
-            const msg = message.split(' :')[1];
-            
-            if (msg && msg.startsWith('!img ')) {
-              const url = msg.split(' ')[1];
-              if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-                showImage(url);
-              }
-            }
-          }
-        };
-        
-        ws.onerror = function(error) {
-          console.error("WebSocket error:", error);
-          if (connectionAttempts < maxAttempts) {
-            setTimeout(tryConnection, 2000);
-          } else {
-            statusDiv.innerHTML = "All connection methods failed";
-            statusDiv.style.background = "rgba(255,0,0,0.7)";
-          }
-        };
-      }
-      
-      function tryFetchPolling() {
-        console.log("Trying fetch polling method...");
-        statusDiv.innerHTML = "Trying polling method...";
-        statusDiv.style.background = "rgba(255,165,0,0.7)";
-        
-        // This is a fallback - we'll simulate connection for now
-        setTimeout(() => {
-          if (connectionAttempts < maxAttempts) {
-            setTimeout(tryConnection, 2000);
-          } else {
-            statusDiv.innerHTML = "All connection methods failed";
-            statusDiv.style.background = "rgba(255,0,0,0.7)";
-          }
-        }, 3000);
-      }
-      
-      function tryProxyConnection() {
-        console.log("Trying proxy connection...");
-        statusDiv.innerHTML = "Trying proxy connection...";
-        statusDiv.style.background = "rgba(255,165,0,0.7)";
-        
-        // Use a different approach - try connecting through a different method
-      const client = new tmi.Client({
-          options: { debug: true },
-          connection: { 
-            reconnect: false, 
-            secure: true,
-            timeout: 10000,
-            server: 'wss://irc-ws.chat.twitch.tv:443'
-          },
-          identity: {
-            username: 'justinfan' + Math.floor(Math.random() * 100000),
-            password: 'oauth:anonymous'
-          },
-        channels: [channel]
-      });
-
-        client.on("connected", (addr, port) => {
-          console.log("Proxy connection successful:", addr, port);
-          statusDiv.innerHTML = "Connected to " + channel + " ✓ (Proxy)";
-          statusDiv.style.background = "rgba(0,255,0,0.7)";
-          setupTmiEvents(client);
-        });
-        
-        client.connect().catch(err => {
-          console.error("Proxy connection failed:", err);
-          statusDiv.innerHTML = "All connection methods failed";
-          statusDiv.style.background = "rgba(255,0,0,0.7)";
-        });
-      }
-      
-      function setupTmiEvents(client) {
-        client.on("message", handleMessage);
-      }
       
       function showManualInput() {
         document.getElementById("manualInput").style.display = "block";
@@ -606,53 +243,8 @@
         }, 3000);
       }
       
-      // Add connection timeout
-      const connectionTimeout = setTimeout(() => {
-        if (statusDiv.innerHTML.includes("Connecting")) {
-          statusDiv.innerHTML = "Connection timeout - trying alternative method";
-          statusDiv.style.background = "rgba(255,165,0,0.7)";
-          console.log("Connection timeout, trying alternative connection...");
-        }
-      }, 10000);
-      
-      // Start connection attempts
+      // Start connection to Chatis
       tryConnection();
-
-      // Message handling function
-      function handleMessage(chan, tags, message, self) {
-        console.log("Message received:", {
-          channel: chan,
-          username: tags.username,
-          message: message,
-          isMod: tags.mod,
-          isBroadcaster: tags.username === channel,
-          isSelf: self
-        });
-
-        if (self) return;
-
-        // Only allow moderators or broadcaster
-        if (!tags.mod && tags.username !== channel) {
-          console.log("Message ignored - user is not mod or broadcaster");
-          return;
-        }
-
-        console.log("User is authorized:", tags.username);
-
-        // Check for !img command
-        if (message.startsWith("!img ")) {
-          const url = message.split(" ")[1];
-          console.log("!img command detected, URL:", url);
-          
-          if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
-            showImage(url);
-          } else {
-            console.log("Invalid URL format:", url);
-            statusDiv.innerHTML = "Invalid URL format";
-            statusDiv.style.background = "rgba(255,0,0,0.7)";
-          }
-        }
-      }
     }
   </script>
 </body>
