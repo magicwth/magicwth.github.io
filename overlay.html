@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Twitch Image Overlay</title>
-  <script src="https://unpkg.com/tmi.js"></script>
+  <script src="https://unpkg.com/tmi.js@1.8.5/dist/tmi.min.js"></script>
   <style>
     body {
       background: transparent;
@@ -57,38 +57,104 @@
         }, 3000);
       };
 
-      // Connect anonymously to Twitch IRC
-      const client = new tmi.Client({
-        connection: { reconnect: true, secure: true },
-        channels: [channel]
-      });
+      // Try multiple connection methods
+      let client = null;
+      let connectionAttempts = 0;
+      const maxAttempts = 3;
+      
+      function tryConnection() {
+        connectionAttempts++;
+        console.log(`Connection attempt ${connectionAttempts}/${maxAttempts}`);
+        
+        if (connectionAttempts === 1) {
+          // Method 1: Simple anonymous connection
+          client = new tmi.Client({
+            options: { debug: true },
+            connection: { 
+              reconnect: false, 
+              secure: true,
+              timeout: 15000
+            },
+            channels: [channel]
+          });
+        } else if (connectionAttempts === 2) {
+          // Method 2: With identity spoofing
+          client = new tmi.Client({
+            options: { debug: true },
+            connection: { 
+              reconnect: false, 
+              secure: true,
+              timeout: 15000
+            },
+            identity: {
+              username: 'justinfan' + Math.floor(Math.random() * 100000),
+              password: 'oauth:anonymous'
+            },
+            channels: [channel]
+          });
+        } else {
+          // Method 3: Different server
+          client = new tmi.Client({
+            options: { debug: true },
+            connection: { 
+              reconnect: false, 
+              secure: true,
+              timeout: 15000,
+              server: 'wss://irc-ws.chat.twitch.tv:443'
+            },
+            channels: [channel]
+          });
+        }
+        
+        setupClientEvents();
+        client.connect().catch(err => {
+          console.error(`Connection attempt ${connectionAttempts} failed:`, err);
+          if (connectionAttempts < maxAttempts) {
+            setTimeout(tryConnection, 2000);
+          } else {
+            statusDiv.innerHTML = "All connection methods failed";
+            statusDiv.style.background = "rgba(255,0,0,0.7)";
+          }
+        });
+      }
+      
+      function setupClientEvents() {
+        client.on("connected", (addr, port) => {
+          console.log("Connected to Twitch IRC:", addr, port);
+          statusDiv.innerHTML = "Connected to " + channel + " ✓";
+          statusDiv.style.background = "rgba(0,255,0,0.7)";
+          clearTimeout(connectionTimeout);
+        });
 
-      // Connection event handlers
-      client.on("connected", (addr, port) => {
-        console.log("Connected to Twitch IRC:", addr, port);
-        statusDiv.innerHTML = "Connected to " + channel + " ✓";
-        statusDiv.style.background = "rgba(0,255,0,0.7)";
-      });
+        client.on("disconnected", (reason) => {
+          console.log("Disconnected from Twitch IRC:", reason);
+          statusDiv.innerHTML = "Disconnected: " + reason;
+          statusDiv.style.background = "rgba(255,0,0,0.7)";
+        });
 
-      client.on("disconnected", (reason) => {
-        console.log("Disconnected from Twitch IRC:", reason);
-        statusDiv.innerHTML = "Disconnected: " + reason;
-        statusDiv.style.background = "rgba(255,0,0,0.7)";
-      });
+        client.on("notice", (channel, msgid, message) => {
+          console.log("Twitch notice:", msgid, message);
+          statusDiv.innerHTML = "Notice: " + message;
+          statusDiv.style.background = "rgba(255,165,0,0.7)";
+        });
 
-      client.on("notice", (channel, msgid, message) => {
-        console.log("Twitch notice:", msgid, message);
-        statusDiv.innerHTML = "Notice: " + message;
-        statusDiv.style.background = "rgba(255,165,0,0.7)";
-      });
+        client.on("message", handleMessage);
+      }
+      
+      // Add connection timeout
+      const connectionTimeout = setTimeout(() => {
+        if (statusDiv.innerHTML.includes("Connecting")) {
+          statusDiv.innerHTML = "Connection timeout - trying alternative method";
+          statusDiv.style.background = "rgba(255,165,0,0.7)";
+          console.log("Connection timeout, trying alternative connection...");
+        }
+      }, 15000);
+      
+      // Start connection attempts
+      tryConnection();
 
-      client.connect().catch(err => {
-        console.error("Connection error:", err);
-        statusDiv.innerHTML = "Connection error: " + err.message;
-        statusDiv.style.background = "rgba(255,0,0,0.7)";
-      });
-
-      client.on("message", (chan, tags, message, self) => {
+      // Message handling function
+      function handleMessage(chan, tags, message, self) {
         console.log("Message received:", {
           channel: chan,
           username: tags.username,
@@ -150,7 +216,9 @@
             statusDiv.style.background = "rgba(255,0,0,0.7)";
           }
         }
-      });
+      }
+
+      client.on("message", handleMessage);
     }
   </script>
 </body>
