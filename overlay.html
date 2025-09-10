@@ -27,6 +27,9 @@
   <!-- Hidden iframe for Chatis chat service -->
   <iframe id="thirdPartyChat" src="" style="display:none;width:0;height:0;border:none;"></iframe>
   
+  <!-- Debug-only Twitch chat popout (visible only with ?debug=1) -->
+  <iframe id="twitchPopout" src="" style="display:none;position:fixed;right:10px;bottom:10px;width:360px;height:520px;border:1px solid rgba(255,255,255,0.2);border-radius:6px;background:#0e0e10;z-index:1002;"></iframe>
+  
   <!-- Test button for debugging -->
   <button id="testButton" style="position:fixed;top:50px;left:10px;z-index:1001;background:blue;color:white;padding:10px;border:none;border-radius:5px;">Test Image</button>
   
@@ -35,11 +38,11 @@
     <input type="text" id="manualUrl" placeholder="Enter image URL manually" style="width:200px;padding:5px;margin-right:5px;">
     <button id="manualShow" style="background:green;color:white;padding:5px;border:none;border-radius:3px;">Show Image</button>
   </div>
-
   <script>
     // Get ?channel=USERNAME from URL
     const params = new URLSearchParams(window.location.search);
     const channel = params.get("channel");
+    const debug = params.get("debug") === "1";
 
     if (!channel) {
       document.body.innerHTML = "<p style='color:white;font-size:24px'>No channel specified! Add ?channel=YourTwitchName</p>";
@@ -51,12 +54,32 @@
       statusDiv.style.cssText = "position:fixed;top:10px;left:10px;color:white;background:rgba(0,0,0,0.7);padding:10px;border-radius:5px;font-family:Arial;z-index:1000;";
       statusDiv.innerHTML = "Connecting to " + channel + "...";
       document.body.appendChild(statusDiv);
+      if (!debug) { statusDiv.style.display = "none"; }
+
+      // Add live log panel (debug only)
+      const logDiv = document.createElement("div");
+      logDiv.style.cssText = "position:fixed;top:70px;left:10px;color:#ddd;background:rgba(0,0,0,0.6);padding:8px 10px;border-radius:5px;font-family:Consolas,monospace;font-size:12px;z-index:1000;max-width:520px;max-height:160px;overflow:auto;display:" + (debug ? "block" : "none") + ";";
+      logDiv.id = "debugLog";
+      document.body.appendChild(logDiv);
+      function logDebug(msg) { try { console.log(msg); if (debug) { const p = document.createElement('div'); p.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`; logDiv.appendChild(p); logDiv.scrollTop = logDiv.scrollHeight; } } catch(e){} }
       
+      // Debug UI: show test button and Twitch chat popout
+      const testBtn = document.getElementById("testButton");
+      testBtn.style.display = debug ? "block" : "none";
+
+      if (debug) {
+        const popout = document.getElementById("twitchPopout");
+        // Use Twitch embed chat with parent params to allow iframe embedding
+        // Add both localhost and 127.0.0.1 for local testing; update parent for your prod host when deploying
+        popout.src = `https://www.twitch.tv/embed/${encodeURIComponent(channel)}/chat?parent=localhost&parent=127.0.0.1`;
+        popout.style.display = "block";
+      }
+
       // Add test button functionality
       document.getElementById("testButton").onclick = function() {
         console.log("Test button clicked");
         const img = document.getElementById("overlayImage");
-        img.src = "https://via.placeholder.com/300x200/ff0000/ffffff?text=TEST";
+        img.src = "https://i.ibb.co/gFZT5XFv/06e9d301-ea99-4807-a1ad-a9082651d182.png";
         img.style.display = "block";
         console.log("Test image should be visible now");
         
@@ -66,10 +89,251 @@
         }, 3000);
       };
 
-      // Use only Chatis service
+      // Try direct Twitch chat (tmi.js) first; fall back to Chatis
+      let tmiClient = null;
+      let tmiReady = false;
+      let tmiTried = false;
+      let tmiLoadTried = false;
+
       function tryConnection() {
-        console.log("Connecting to Chatis service...");
-        tryChatisService();
+        logDebug("Connecting via tmi.js first...");
+        statusDiv.innerHTML = "Connecting to " + channel + "... (TMI)";
+        ensureTmiLoaded(() => {
+          tryTmi();
+        });
+
+        // If TMI doesn't connect within 6s, fall back to Chatis
+        setTimeout(() => {
+          if (!tmiReady) {
+            logDebug("TMI not connected in time, trying raw IRC...");
+            tryRawIrc();
+          }
+        }, 6000);
+      }
+
+      function tryTmi() {
+        if (tmiTried) return;
+        tmiTried = true;
+        try {
+          // Initialize client
+          const Tmi = (window.tmi || window.Tmi || window.TMI);
+          if (!Tmi || !Tmi.Client) throw new Error('tmi.js not available after load');
+          tmiClient = new Tmi.Client({
+            options: { skipMembership: true },
+            connection: { secure: true, reconnect: true },
+            channels: [channel]
+          });
+
+          tmiClient.on('connected', () => {
+            tmiReady = true;
+            logDebug("tmi.js connected");
+            statusDiv.innerHTML = "Connected to " + channel + " ✓ (TMI)";
+            statusDiv.style.background = "rgba(0,255,0,0.7)";
+          });
+
+          tmiClient.on('reconnect', () => { logDebug('tmi.js reconnecting...'); });
+          tmiClient.on('notice', (ch, msgid, message) => { logDebug(`notice: ${msgid} ${message}`); });
+          tmiClient.on('join', (ch, username, self) => { if (self) logDebug(`joined ${ch}`); });
+          tmiClient.on('pong', (latency) => { logDebug(`pong ${latency || ''}`); });
+
+          tmiClient.on('disconnected', (reason) => {
+            logDebug("tmi.js disconnected: " + reason);
+            if (!tmiReady) {
+              statusDiv.innerHTML = "TMI failed, trying Chatis...";
+              statusDiv.style.background = "rgba(255,165,0,0.7)";
+              tryChatisService();
+            }
+          });
+
+          tmiClient.on('message', (chan, tags, message, self) => {
+            if (self) return;
+            if (!message) return;
+
+            // Accept when message contains !img (any position)
+            if (message.indexOf('!img') === -1) return;
+
+            const isBroadcaster = tags && tags.badges && tags.badges.broadcaster === '1';
+            const isMod = !!(tags && tags.mod);
+            const isStreamerName = ((tags && (tags['display-name'] || '')) || '').toLowerCase() === channel.toLowerCase();
+
+            // In debug mode allow anyone; otherwise require broadcaster/mod/streamer
+            if (!debug && !(isBroadcaster || isMod || isStreamerName)) return;
+
+            // Extract first URL after !img
+            const after = message.substring(message.indexOf('!img') + 4).trim();
+            const parts = after.split(/\s+/);
+            const candidate = parts[0] || '';
+            const url = candidate.replace(/^<|>$/g, '');
+            logDebug(`msg by ${tags['display-name']||tags.username}: ${message}`);
+            if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+              showImage(url);
+            } else {
+              logDebug('No valid URL detected after !img');
+            }
+          });
+
+          tmiClient.connect().catch((err) => {
+            logDebug("tmi.js connect error: " + (err && err.message ? err.message : String(err)));
+            statusDiv.innerHTML = "TMI error, trying Chatis...";
+            statusDiv.style.background = "rgba(255,165,0,0.7)";
+            tryChatisService();
+          });
+        } catch (e) {
+          logDebug("tmi.js init error: " + (e && e.message ? e.message : String(e)));
+          statusDiv.innerHTML = "TMI init failed, trying Chatis...";
+          statusDiv.style.background = "rgba(255,165,0,0.7)";
+          tryChatisService();
+        }
+      }
+
+      function ensureTmiLoaded(onReady) {
+        if (window.tmi && window.tmi.Client) {
+          logDebug('tmi.js already present');
+          return onReady();
+        }
+        if (tmiLoadTried) return; // prevent duplicate loads
+        tmiLoadTried = true;
+
+        function loadScript(src, onload, onerror){
+          const s = document.createElement('script');
+          s.src = src;
+          s.async = false;
+          s.onload = onload;
+          s.onerror = onerror;
+          document.head.appendChild(s);
+        }
+
+        logDebug('Loading tmi.js from unpkg...');
+        loadScript('https://unpkg.com/tmi.js@1.8.5/dist/tmi.min.js', () => {
+          logDebug('tmi.js loaded from unpkg');
+          onReady();
+        }, () => {
+          logDebug('Failed to load from unpkg, trying jsdelivr...');
+          loadScript('https://cdn.jsdelivr.net/npm/tmi.js@1.8.5/dist/tmi.min.js', () => {
+            logDebug('tmi.js loaded from jsdelivr');
+            onReady();
+          }, () => {
+            logDebug('Failed to load tmi.js from both CDNs. Trying raw IRC.');
+            statusDiv.innerHTML = 'TMI load failed, trying raw IRC...';
+            statusDiv.style.background = 'rgba(255,165,0,0.7)';
+            tryRawIrc();
+          });
+        });
+      }
+
+      // Raw Twitch IRC WebSocket fallback (anonymous)
+      let ircSocket = null;
+      let ircReady = false;
+      function tryRawIrc() {
+        if (ircSocket && (ircSocket.readyState === WebSocket.OPEN || ircSocket.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        try {
+          logDebug('Connecting raw IRC websocket...');
+          statusDiv.innerHTML = 'Connecting to ' + channel + ' ... (IRC)';
+          statusDiv.style.background = 'rgba(0,128,255,0.7)';
+
+          ircSocket = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+          const nick = 'justinfan' + Math.floor(Math.random() * 1000000);
+          let buffer = '';
+
+          function send(line) { try { ircSocket.send(line + '\r\n'); logDebug('> ' + line); } catch(e){} }
+
+          ircSocket.onopen = function() {
+            logDebug('IRC socket open');
+            // Request message tags and commands
+            send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+            // Anonymous connection (no PASS required)
+            send('NICK ' + nick);
+            send('JOIN #' + channel.toLowerCase());
+          };
+
+          ircSocket.onmessage = function(event) {
+            buffer += event.data;
+            const lines = buffer.split('\r\n');
+            buffer = lines.pop();
+            for (const raw of lines) {
+              if (!raw) continue;
+              logDebug('< ' + raw);
+              if (raw.startsWith('PING')) {
+                send('PONG :tmi.twitch.tv');
+                continue;
+              }
+              const parsed = parseIrc(raw);
+              if (parsed && parsed.command === 'PRIVMSG') {
+                const msg = parsed.trailing || '';
+                const tags = parsed.tags || {};
+                // Permission check
+                const badges = (tags.badges || '').split(',').reduce((acc, b) => { const [k,v] = b.split('/'); if (k) acc[k]=v||'1'; return acc; }, {});
+                const isBroadcaster = badges.broadcaster === '1';
+                const isMod = tags.mod === '1' || badges.moderator === '1';
+                const displayName = tags['display-name'] || '';
+                const isStreamerName = displayName.toLowerCase() === channel.toLowerCase();
+
+                if (!msg || msg.indexOf('!img') === -1) continue;
+                if (!debug && !(isBroadcaster || isMod || isStreamerName)) continue;
+
+                const after = msg.substring(msg.indexOf('!img') + 4).trim();
+                const parts = after.split(/\s+/);
+                const candidate = (parts[0] || '').replace(/^<|>$/g, '');
+                if (candidate && (candidate.startsWith('http://') || candidate.startsWith('https://'))) {
+                  showImage(candidate);
+                } else {
+                  logDebug('IRC: No valid URL after !img');
+                }
+              }
+            }
+            if (!ircReady) {
+              ircReady = true;
+              statusDiv.innerHTML = 'Connected to ' + channel + ' ✓ (IRC)';
+              statusDiv.style.background = 'rgba(0,255,0,0.7)';
+            }
+          };
+
+          ircSocket.onerror = function(err) {
+            logDebug('IRC socket error');
+          };
+
+          ircSocket.onclose = function() {
+            logDebug('IRC socket closed');
+            if (!tmiReady) {
+              statusDiv.innerHTML = 'IRC failed, trying Chatis...';
+              statusDiv.style.background = 'rgba(255,165,0,0.7)';
+              tryChatisService();
+            }
+          };
+        } catch (e) {
+          logDebug('IRC init error: ' + (e && e.message ? e.message : String(e)));
+          statusDiv.innerHTML = 'IRC init failed, trying Chatis...';
+          statusDiv.style.background = 'rgba(255,165,0,0.7)';
+          tryChatisService();
+        }
+      }
+
+      function parseIrc(line) {
+        // Very small IRC parser with Twitch tags support
+        let rest = line;
+        const msg = { tags: {}, prefix: '', command: '', params: [], trailing: '' };
+        if (rest[0] === '@') {
+          const idx = rest.indexOf(' ');
+          const rawTags = rest.substring(1, idx);
+          rest = rest.substring(idx + 1);
+          rawTags.split(';').forEach(kv => { const i = kv.indexOf('='); const k = kv.substring(0,i); const v = kv.substring(i+1); msg.tags[k] = v; });
+        }
+        if (rest[0] === ':') {
+          const idx = rest.indexOf(' ');
+          msg.prefix = rest.substring(1, idx);
+          rest = rest.substring(idx + 1);
+        }
+        const trailingIdx = rest.indexOf(' :');
+        if (trailingIdx !== -1) {
+          msg.trailing = rest.substring(trailingIdx + 2);
+          rest = rest.substring(0, trailingIdx);
+        }
+        const parts = rest.split(' ');
+        msg.command = parts.shift();
+        msg.params = parts;
+        return msg;
       }
       
       function tryChatisService() {
@@ -103,9 +367,11 @@
                       const username = parts[0] || '';
                       const message = text.substring(text.indexOf('!img '));
                       
-                      // Check if it's a mod/broadcaster (simplified check)
-                      if (username.toLowerCase() === channel.toLowerCase() || 
-                          messageEl.querySelector('[class*="mod"], [class*="broadcaster"], [class*="badge"]')) {
+                      // Permission: broadcaster or moderator; allow anyone only when debug
+                      const isBroadcaster = username.toLowerCase() === channel.toLowerCase();
+                      const hasModBadge = !!messageEl.querySelector('[class*="mod" i], [class*="moderator" i]');
+                      const hasBroadcasterBadge = !!messageEl.querySelector('[class*="broadcaster" i]');
+                      if (debug || isBroadcaster || hasModBadge || hasBroadcasterBadge) {
                         const url = message.split(' ')[1];
                         if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
                           showImage(url);
@@ -165,8 +431,13 @@
                   const parts = text.split(' ');
                   const username = parts[0] || '';
                   const message = text.substring(text.indexOf('!img '));
-                  
-                  if (message.startsWith('!img ')) {
+
+                  // Permission: broadcaster or moderator; allow anyone only when debug
+                  const isBroadcaster = username.toLowerCase() === channel.toLowerCase();
+                  const hasModBadge = !!messageEl.querySelector('[class*="mod" i], [class*="moderator" i]');
+                  const hasBroadcasterBadge = !!messageEl.querySelector('[class*="broadcaster" i]');
+
+                  if (message.startsWith('!img ') && (debug || isBroadcaster || hasModBadge || hasBroadcasterBadge)) {
                     const url = message.split(' ')[1];
                     if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
                       showImage(url);
@@ -243,7 +514,7 @@
         }, 3000);
       }
       
-      // Start connection to Chatis
+      // Start connection (TMI first, then Chatis fallback)
       tryConnection();
     }
   </script>
