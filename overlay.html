@@ -6,6 +6,7 @@
   <!-- Try multiple libraries as fallbacks -->
   <script src="https://unpkg.com/tmi.js@1.8.5/dist/tmi.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/ws@8.14.2/lib/websocket.js"></script>
+  <script src="https://unpkg.com/axios@1.6.0/dist/axios.min.js"></script>
   <style>
     body {
       background: transparent;
@@ -28,6 +29,12 @@
   
   <!-- Test button for debugging -->
   <button id="testButton" style="position:fixed;top:50px;left:10px;z-index:1001;background:blue;color:white;padding:10px;border:none;border-radius:5px;">Test Image</button>
+  
+  <!-- Manual input for when connection fails -->
+  <div id="manualInput" style="position:fixed;top:90px;left:10px;z-index:1001;background:rgba(0,0,0,0.8);padding:10px;border-radius:5px;display:none;">
+    <input type="text" id="manualUrl" placeholder="Enter image URL manually" style="width:200px;padding:5px;margin-right:5px;">
+    <button id="manualShow" style="background:green;color:white;padding:5px;border:none;border-radius:3px;">Show Image</button>
+  </div>
 
   <script>
     // Get ?channel=USERNAME from URL
@@ -38,7 +45,7 @@
       document.body.innerHTML = "<p style='color:white;font-size:24px'>No channel specified! Add ?channel=YourTwitchName</p>";
     } else {
       console.log("Connecting to Twitch chat for channel:", channel);
-      
+
       // Add status display
       const statusDiv = document.createElement("div");
       statusDiv.style.cssText = "position:fixed;top:10px;left:10px;color:white;background:rgba(0,0,0,0.7);padding:10px;border-radius:5px;font-family:Arial;z-index:1000;";
@@ -49,7 +56,7 @@
       document.getElementById("testButton").onclick = function() {
         console.log("Test button clicked");
         const img = document.getElementById("overlayImage");
-        img.src = "https://i.ibb.co/gFZT5XFv/06e9d301-ea99-4807-a1ad-a9082651d182.png";
+        img.src = "https://via.placeholder.com/300x200/ff0000/ffffff?text=TEST";
         img.style.display = "block";
         console.log("Test image should be visible now");
         
@@ -61,7 +68,7 @@
 
       // Try completely different approaches
       let connectionAttempts = 0;
-      const maxAttempts = 4;
+      const maxAttempts = 6;
       
       function tryConnection() {
         connectionAttempts++;
@@ -73,8 +80,12 @@
           tryWebSocketConnection();
         } else if (connectionAttempts === 3) {
           tryFetchPolling();
-        } else {
+        } else if (connectionAttempts === 4) {
           tryProxyConnection();
+        } else if (connectionAttempts === 5) {
+          tryCorsProxy();
+        } else {
+          tryAlternativeService();
         }
       }
       
@@ -196,13 +207,136 @@
         
         client.connect().catch(err => {
           console.error("Proxy connection failed:", err);
-          statusDiv.innerHTML = "All connection methods failed";
+          if (connectionAttempts < maxAttempts) {
+            setTimeout(tryConnection, 2000);
+          } else {
+            statusDiv.innerHTML = "All connection methods failed";
+            statusDiv.style.background = "rgba(255,0,0,0.7)";
+          }
+        });
+      }
+      
+      function tryCorsProxy() {
+        console.log("Trying CORS proxy connection...");
+        statusDiv.innerHTML = "Trying CORS proxy...";
+        statusDiv.style.background = "rgba(255,165,0,0.7)";
+        
+        // Try using a CORS proxy to connect
+        const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+        const wsUrl = 'wss://irc-ws.chat.twitch.tv:443';
+        
+        try {
+          const ws = new WebSocket(wsUrl);
+          
+          ws.onopen = function() {
+            console.log("CORS proxy WebSocket connected");
+            ws.send('PASS oauth:anonymous');
+            ws.send('NICK justinfan' + Math.floor(Math.random() * 100000));
+            ws.send('JOIN #' + channel);
+            statusDiv.innerHTML = "Connected to " + channel + " ✓ (CORS)";
+            statusDiv.style.background = "rgba(0,255,0,0.7)";
+          };
+          
+          ws.onmessage = function(event) {
+            const message = event.data;
+            console.log("CORS WS message:", message);
+            
+            if (message.includes('PRIVMSG')) {
+              const parts = message.split(' ');
+              const username = parts[0].split('!')[0].substring(1);
+              const msg = message.split(' :')[1];
+              
+              if (msg && msg.startsWith('!img ')) {
+                const url = msg.split(' ')[1];
+                if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                  showImage(url);
+                }
+              }
+            }
+          };
+          
+          ws.onerror = function(error) {
+            console.error("CORS proxy error:", error);
+            if (connectionAttempts < maxAttempts) {
+              setTimeout(tryConnection, 2000);
+            } else {
+              statusDiv.innerHTML = "All connection methods failed";
+              statusDiv.style.background = "rgba(255,0,0,0.7)";
+            }
+          };
+        } catch (err) {
+          console.error("CORS proxy setup failed:", err);
+          if (connectionAttempts < maxAttempts) {
+            setTimeout(tryConnection, 2000);
+          } else {
+            statusDiv.innerHTML = "All connection methods failed";
+            statusDiv.style.background = "rgba(255,0,0,0.7)";
+          }
+        }
+      }
+      
+      function tryAlternativeService() {
+        console.log("Trying alternative service...");
+        statusDiv.innerHTML = "Trying alternative service...";
+        statusDiv.style.background = "rgba(255,165,0,0.7)";
+        
+        // Try using a different approach - maybe a different IRC server or method
+      const client = new tmi.Client({
+          options: { 
+            debug: true,
+            clientId: 'kimne78kx3ncx6brgo4mv6wki5h1ko'
+          },
+          connection: { 
+            reconnect: false, 
+            secure: true,
+            timeout: 15000,
+            server: 'wss://irc-ws.chat.twitch.tv:443'
+          },
+          identity: {
+            username: 'justinfan' + Math.floor(Math.random() * 100000),
+            password: 'oauth:anonymous'
+          },
+        channels: [channel]
+      });
+
+        client.on("connected", (addr, port) => {
+          console.log("Alternative service connection successful:", addr, port);
+          statusDiv.innerHTML = "Connected to " + channel + " ✓ (Alt)";
+          statusDiv.style.background = "rgba(0,255,0,0.7)";
+          setupTmiEvents(client);
+        });
+        
+        client.connect().catch(err => {
+          console.error("Alternative service connection failed:", err);
+          statusDiv.innerHTML = "All connection methods failed - Twitch may be blocking anonymous connections";
           statusDiv.style.background = "rgba(255,0,0,0.7)";
+          
+          // Show manual input as fallback
+          document.getElementById("manualInput").style.display = "block";
+          setupManualInput();
         });
       }
       
       function setupTmiEvents(client) {
         client.on("message", handleMessage);
+      }
+      
+      function setupManualInput() {
+        document.getElementById("manualShow").onclick = function() {
+          const url = document.getElementById("manualUrl").value;
+          if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+            showImage(url);
+            document.getElementById("manualUrl").value = "";
+          } else {
+            alert("Please enter a valid URL starting with http:// or https://");
+          }
+        };
+        
+        document.getElementById("manualUrl").addEventListener("keypress", function(e) {
+          if (e.key === "Enter") {
+            document.getElementById("manualShow").click();
+          }
+        });
       }
       
       function showImage(url) {
