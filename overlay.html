@@ -23,6 +23,9 @@
 </head>
 <body>
   <img id="overlayImage" />
+  
+  <!-- Test button for debugging -->
+  <button id="testButton" style="position:fixed;top:50px;left:10px;z-index:1001;background:blue;color:white;padding:10px;border:none;border-radius:5px;">Test Image</button>
 
   <script>
     // Get ?channel=USERNAME from URL
@@ -39,6 +42,20 @@
       statusDiv.style.cssText = "position:fixed;top:10px;left:10px;color:white;background:rgba(0,0,0,0.7);padding:10px;border-radius:5px;font-family:Arial;z-index:1000;";
       statusDiv.innerHTML = "Connecting to " + channel + "...";
       document.body.appendChild(statusDiv);
+      
+      // Add test button functionality
+      document.getElementById("testButton").onclick = function() {
+        console.log("Test button clicked");
+        const img = document.getElementById("overlayImage");
+        img.src = "https://via.placeholder.com/300x200/ff0000/ffffff?text=TEST";
+        img.style.display = "block";
+        console.log("Test image should be visible now");
+        
+        setTimeout(() => {
+          img.style.display = "none";
+          console.log("Test image hidden");
+        }, 3000);
+      };
 
       // Connect anonymously to Twitch IRC
       const client = new tmi.Client({
@@ -115,7 +132,10 @@
             
             img.src = url;
             img.style.display = "block";
-            console.log("Image displayed:", url);
+            console.log("Image src set to:", url);
+            console.log("Image display set to block");
+            console.log("Image element:", img);
+            console.log("Image computed style:", window.getComputedStyle(img).display);
 
             // Hide image after 3 seconds
             setTimeout(() => {
