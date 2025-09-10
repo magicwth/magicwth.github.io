@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <title>Twitch Image Overlay</title>
+  <!-- Try multiple libraries as fallbacks -->
   <script src="https://unpkg.com/tmi.js@1.8.5/dist/tmi.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ws@8.14.2/lib/websocket.js"></script>
   <style>
     body {
       background: transparent;
@@ -57,58 +59,46 @@
         }, 3000);
       };
 
-      // Try multiple connection methods
-      let client = null;
+      // Try completely different approaches
       let connectionAttempts = 0;
-      const maxAttempts = 3;
+      const maxAttempts = 4;
       
       function tryConnection() {
         connectionAttempts++;
         console.log(`Connection attempt ${connectionAttempts}/${maxAttempts}`);
         
         if (connectionAttempts === 1) {
-          // Method 1: Simple anonymous connection
-          client = new tmi.Client({
-            options: { debug: true },
-            connection: { 
-              reconnect: false, 
-              secure: true,
-              timeout: 15000
-            },
-            channels: [channel]
-          });
+          tryTmiConnection();
         } else if (connectionAttempts === 2) {
-          // Method 2: With identity spoofing
-          client = new tmi.Client({
-            options: { debug: true },
-            connection: { 
-              reconnect: false, 
-              secure: true,
-              timeout: 15000
-            },
-            identity: {
-              username: 'justinfan' + Math.floor(Math.random() * 100000),
-              password: 'oauth:anonymous'
-            },
-            channels: [channel]
-          });
+          tryWebSocketConnection();
+        } else if (connectionAttempts === 3) {
+          tryFetchPolling();
         } else {
-          // Method 3: Different server
-          client = new tmi.Client({
-            options: { debug: true },
-            connection: { 
-              reconnect: false, 
-              secure: true,
-              timeout: 15000,
-              server: 'wss://irc-ws.chat.twitch.tv:443'
-            },
-            channels: [channel]
-          });
+          tryProxyConnection();
         }
+      }
+      
+      function tryTmiConnection() {
+        console.log("Trying TMI.js connection...");
+        const client = new tmi.Client({
+          options: { debug: true },
+          connection: { 
+            reconnect: false, 
+            secure: true,
+            timeout: 10000
+          },
+          channels: [channel]
+        });
         
-        setupClientEvents();
+        client.on("connected", (addr, port) => {
+          console.log("TMI connection successful:", addr, port);
+          statusDiv.innerHTML = "Connected to " + channel + " ✓";
+          statusDiv.style.background = "rgba(0,255,0,0.7)";
+          setupTmiEvents(client);
+        });
+        
         client.connect().catch(err => {
-          console.error(`Connection attempt ${connectionAttempts} failed:`, err);
+          console.error("TMI connection failed:", err);
           if (connectionAttempts < maxAttempts) {
             setTimeout(tryConnection, 2000);
           } else {
@@ -118,27 +108,130 @@
         });
       }
       
-      function setupClientEvents() {
-        client.on("connected", (addr, port) => {
-          console.log("Connected to Twitch IRC:", addr, port);
-          statusDiv.innerHTML = "Connected to " + channel + " ✓";
+      function tryWebSocketConnection() {
+        console.log("Trying direct WebSocket connection...");
+        const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+        
+        ws.onopen = function() {
+          console.log("WebSocket connected");
+          ws.send('PASS oauth:anonymous');
+          ws.send('NICK justinfan' + Math.floor(Math.random() * 100000));
+          ws.send('JOIN #' + channel);
+          statusDiv.innerHTML = "Connected to " + channel + " ✓ (WS)";
           statusDiv.style.background = "rgba(0,255,0,0.7)";
-          clearTimeout(connectionTimeout);
+        };
+        
+        ws.onmessage = function(event) {
+          const message = event.data;
+          console.log("WS message:", message);
+          
+          if (message.includes('PRIVMSG')) {
+            const parts = message.split(' ');
+            const username = parts[0].split('!')[0].substring(1);
+            const msg = message.split(' :')[1];
+            
+            if (msg && msg.startsWith('!img ')) {
+              const url = msg.split(' ')[1];
+              if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                showImage(url);
+              }
+            }
+          }
+        };
+        
+        ws.onerror = function(error) {
+          console.error("WebSocket error:", error);
+          if (connectionAttempts < maxAttempts) {
+            setTimeout(tryConnection, 2000);
+          } else {
+            statusDiv.innerHTML = "All connection methods failed";
+            statusDiv.style.background = "rgba(255,0,0,0.7)";
+          }
+        };
+      }
+      
+      function tryFetchPolling() {
+        console.log("Trying fetch polling method...");
+        statusDiv.innerHTML = "Trying polling method...";
+        statusDiv.style.background = "rgba(255,165,0,0.7)";
+        
+        // This is a fallback - we'll simulate connection for now
+        setTimeout(() => {
+          if (connectionAttempts < maxAttempts) {
+            setTimeout(tryConnection, 2000);
+          } else {
+            statusDiv.innerHTML = "All connection methods failed";
+            statusDiv.style.background = "rgba(255,0,0,0.7)";
+          }
+        }, 3000);
+      }
+      
+      function tryProxyConnection() {
+        console.log("Trying proxy connection...");
+        statusDiv.innerHTML = "Trying proxy connection...";
+        statusDiv.style.background = "rgba(255,165,0,0.7)";
+        
+        // Use a different approach - try connecting through a different method
+        const client = new tmi.Client({
+          options: { debug: true },
+          connection: { 
+            reconnect: false, 
+            secure: true,
+            timeout: 10000,
+            server: 'wss://irc-ws.chat.twitch.tv:443'
+          },
+          identity: {
+            username: 'justinfan' + Math.floor(Math.random() * 100000),
+            password: 'oauth:anonymous'
+          },
+          channels: [channel]
         });
-
-        client.on("disconnected", (reason) => {
-          console.log("Disconnected from Twitch IRC:", reason);
-          statusDiv.innerHTML = "Disconnected: " + reason;
+        
+        client.on("connected", (addr, port) => {
+          console.log("Proxy connection successful:", addr, port);
+          statusDiv.innerHTML = "Connected to " + channel + " ✓ (Proxy)";
+          statusDiv.style.background = "rgba(0,255,0,0.7)";
+          setupTmiEvents(client);
+        });
+        
+        client.connect().catch(err => {
+          console.error("Proxy connection failed:", err);
+          statusDiv.innerHTML = "All connection methods failed";
           statusDiv.style.background = "rgba(255,0,0,0.7)";
         });
-
-        client.on("notice", (channel, msgid, message) => {
-          console.log("Twitch notice:", msgid, message);
-          statusDiv.innerHTML = "Notice: " + message;
-          statusDiv.style.background = "rgba(255,165,0,0.7)";
-        });
-
+      }
+      
+      function setupTmiEvents(client) {
         client.on("message", handleMessage);
+      }
+      
+      function showImage(url) {
+        console.log("Showing image:", url);
+        const img = document.getElementById("overlayImage");
+        
+        img.onerror = function() {
+          console.log("Failed to load image:", url);
+          statusDiv.innerHTML = "Failed to load image";
+          statusDiv.style.background = "rgba(255,0,0,0.7)";
+          img.style.display = "none";
+        };
+        
+        img.onload = function() {
+          console.log("Image loaded successfully:", url);
+          statusDiv.innerHTML = "Image displayed: " + url.substring(0, 50) + "...";
+          statusDiv.style.background = "rgba(0,255,255,0.7)";
+        };
+        
+        img.src = url;
+        img.style.display = "block";
+        console.log("Image src set to:", url);
+
+        setTimeout(() => {
+          img.style.display = "none";
+          console.log("Image hidden after 3 seconds");
+          statusDiv.innerHTML = "Connected to " + channel + " ✓";
+          statusDiv.style.background = "rgba(0,255,0,0.7)";
+        }, 3000);
       }
       
       // Add connection timeout
@@ -180,36 +273,7 @@
           console.log("!img command detected, URL:", url);
           
           if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
-            const img = document.getElementById("overlayImage");
-            
-            // Add error handling for image loading
-            img.onerror = function() {
-              console.log("Failed to load image:", url);
-              statusDiv.innerHTML = "Failed to load image";
-              statusDiv.style.background = "rgba(255,0,0,0.7)";
-              img.style.display = "none";
-            };
-            
-            img.onload = function() {
-              console.log("Image loaded successfully:", url);
-              statusDiv.innerHTML = "Image displayed: " + url.substring(0, 50) + "...";
-              statusDiv.style.background = "rgba(0,255,255,0.7)";
-            };
-            
-            img.src = url;
-            img.style.display = "block";
-            console.log("Image src set to:", url);
-            console.log("Image display set to block");
-            console.log("Image element:", img);
-            console.log("Image computed style:", window.getComputedStyle(img).display);
-
-            // Hide image after 3 seconds
-            setTimeout(() => {
-              img.style.display = "none";
-              console.log("Image hidden after 3 seconds");
-              statusDiv.innerHTML = "Connected to " + channel + " ✓";
-              statusDiv.style.background = "rgba(0,255,0,0.7)";
-            }, 3000);
+            showImage(url);
           } else {
             console.log("Invalid URL format:", url);
             statusDiv.innerHTML = "Invalid URL format";
@@ -217,9 +281,8 @@
           }
         }
       }
-
-      client.on("message", handleMessage);
     }
   </script>
 </body>
 </html>
+
